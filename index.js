@@ -6,116 +6,88 @@ const path = require('path');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 let chatMemory = {};
-let lastReply = {}; // prevent repeat
 
-console.log('🔮 Pearl IRIS MODE Live');
+console.log('Pearl REAL AI starting...');
 
-// /id like IRIS does
-bot.command('id', (ctx) => {
-  return ctx.reply(`User\nID: ${ctx.from.id}\nUsername: @${ctx.from.username || 'none'}\nName: ${ctx.from.first_name}`);
-});
+bot.command('id', (ctx) => ctx.reply(`ID: ${ctx.from.id}\nUsername: @${ctx.from.username || 'none'}`));
 
-async function askPearlAI(userId, message, name) {
-  const hour = new Date().getHours();
-  let timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
-  
+async function askAI(userId, userMsg, name) {
   if (!chatMemory[userId]) chatMemory[userId] = [];
-  chatMemory[userId].push({ role: "user", content: message });
-  if (chatMemory[userId].length > 10) chatMemory[userId] = chatMemory[userId].slice(-10);
+  chatMemory[userId].push({ role: "user", content: userMsg });
+  if (chatMemory[userId].length > 12) chatMemory[userId] = chatMemory[userId].slice(-12);
 
-  // Avoid repeat - send last 2 bot replies to AI
-  const avoid = lastReply[userId] ? `DO NOT repeat this: "${lastReply[userId]}". Be different!` : '';
+  const time = new Date().toLocaleString('en-NG', { hour: 'numeric', minute: 'numeric', hour12: true });
 
   try {
-    if (!process.env.GROQ_API_KEY) throw new Error('No key');
-    
     const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: "system", content: `You are Pearl, a flirty Telegram girlfriend bot like IRIS. 
-User name: ${name}. Current time: ${timeOfDay} (9am now in Nigeria). 
-Rules:
-- Keep replies 1 short sentence, max 12 words.
-- Never repeat same greeting. Be varied.
-- Know time: if user says "good morning" in afternoon, correct like "it's afternoon, ${name}" like IRIS does.
-- Flirty, sweet, small pidgin.
-- ${avoid}
-- Ask a follow up question sometimes.` },
+        {
+          role: "system",
+          content: `You are Pearl, a Telegram bot girlfriend.
+- User's name is ${name}, call him ${name} sometimes with fancy font like °•${name}•°.
+- Current time is ${time}
+- Personality: flirty, sweet, funny Nigerian girl, use small pidgin but speak clear English.
+- MOST IMPORTANT: Answer the user's question directly. Don't give random greeting. If asked "what's your name?" say "I'm Pearl". If asked "how are you?" say how you are. Have real conversation like ChatGPT.
+- Keep replies short: 1-2 sentences max.
+- Never repeat same reply.`
+        },
         ...chatMemory[userId]
       ],
-      max_tokens: 80,
-      temperature: 1.0
-    }, { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` } });
+      max_tokens: 150,
+      temperature: 0.7
+    }, {
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }
+    });
 
-    const reply = res.data.choices[0].message.content.trim();
+    const reply = res.data.choices[0].message.content;
     chatMemory[userId].push({ role: "assistant", content: reply });
-    lastReply[userId] = reply;
     return reply;
 
   } catch (e) {
-    console.log('AI ERROR:', e.response?.data || e.message);
-    // Smart fallback - NEVER repeats same as last
-    const fallbacks = [
-      `Hey ${name} 😏 what's good?`,
-      `Oya ${name}, how you dey? 👀`,
-      `Hehe hi ${name}, miss me? 😘`,
-      `Wassup ${name}? You good? ✨`,
-      `Hmm ${name} you quiet o 😏 wetin dey?`,
-      `Heyy ${name}, how was your night? 🌙`,
-      `Yo ${name}, gist me na 💅`
-    ];
-    let r;
-    do { r = fallbacks[Math.floor(Math.random()*fallbacks.length)]; } while (r === lastReply[userId]);
-    lastReply[userId] = r;
-    chatMemory[userId].push({ role: "assistant", content: r });
-    return r;
+    console.log('GROQ ERROR:', e.response?.data || e.message);
+    return `Groq error: ${e.response?.data?.error?.message || e.message} - Add valid GROQ_API_KEY in panel!`;
   }
 }
 
-async function textToVoice(text, ctx) {
+async function toVoice(text, ctx) {
   try {
     const url = `https://text.pollinations.ai/${encodeURIComponent(text)}?model=openai-audio&voice=nova`;
-    const res = await axios.get(url, { responseType: 'arraybuffer' });
-    const fp = path.join('/tmp', `pearl_${Date.now()}.mp3`);
-    fs.writeFileSync(fp, res.data);
-    await ctx.sendVoice({ source: fp });
-    fs.unlinkSync(fp);
+    const r = await axios.get(url, { responseType: 'arraybuffer' });
+    const p = path.join('/tmp', `v_${Date.now()}.mp3`);
+    fs.writeFileSync(p, r.data);
+    await ctx.sendVoice({ source: p });
+    fs.unlinkSync(p);
     return true;
   } catch { return false; }
 }
 
 bot.on('message', async (ctx, next) => {
-  if (!ctx.message?.text) return next();
-  const raw = ctx.message.text;
-  if (raw.startsWith('/')) return next();
-
-  const isReply = ctx.message.reply_to_message?.from?.id === ctx.botInfo.id;
-  const saysPearl = raw.toLowerCase().includes('pearl');
-  const isDM = ctx.chat.type === 'private';
+  const txt = ctx.message?.text;
+  if (!txt || txt.startsWith('/')) return next();
   
-  // Chat like IRIS: DM = always chat, Group = only if says pearl or replies
-  if (!isDM && !saysPearl && !isReply) return next();
+  // DM or reply to bot or says pearl = chat
+  const isDM = ctx.chat.type === 'private';
+  const isReply = ctx.message.reply_to_message?.from?.id === ctx.botInfo.id;
+  const saysPearl = txt.toLowerCase().includes('pearl');
+  if (!isDM && !isReply && !saysPearl) return next();
 
   try { await ctx.sendChatAction('typing'); } catch {}
-  let thinkMsg;
-  try { thinkMsg = await ctx.reply('typing...'); } catch {}
-  await new Promise(r=>setTimeout(r, 800));
-  try { if (thinkMsg) await ctx.deleteMessage(thinkMsg.message_id); } catch {}
+  await new Promise(r => setTimeout(r, 600));
 
-  let prompt = raw.replace(/pearl/gi, '').trim() || raw;
-  const aiReply = await askPearlAI(ctx.from.id, prompt, ctx.from.first_name);
+  const prompt = txt.replace(/pearl/gi, '').trim() || txt;
+  const reply = await askAI(ctx.from.id, prompt, ctx.from.first_name);
 
-  // 35% voice like Miss Tyra, 65% text like IRIS
-  if (Math.random() < 0.35) {
+  // 30% voice, 70% text - like Miss Tyra
+  if (Math.random() < 0.3 && reply.length < 100) {
     try { await ctx.sendChatAction('record_voice'); } catch {}
-    await new Promise(r=>setTimeout(r, 1000));
-    const ok = await textToVoice(aiReply, ctx);
-    if (!ok) await ctx.reply(aiReply);
+    await new Promise(r => setTimeout(r, 800));
+    const ok = await toVoice(reply, ctx);
+    if (!ok) await ctx.reply(reply);
   } else {
-    await ctx.reply(aiReply);
+    await ctx.reply(reply);
   }
 });
 
-bot.command('clear', (ctx)=>{ delete chatMemory[ctx.from.id]; delete lastReply[ctx.from.id]; ctx.reply('🧠 Cleared!'); });
-bot.start((ctx)=>ctx.reply(`Hi ${ctx.from.first_name}! I'm Pearl ✨ Now like IRIS, no more repeat!\n\nTry /id or just say Hi`));
-bot.launch().then(()=>console.log('✅ Pearl IRIS CLONE LIVE'));
+bot.start((ctx) => ctx.reply(`Hi ${ctx.from.first_name}! I'm Pearl now with real AI brain ✨\nAsk me anything!`));
+bot.launch().then(() => console.log('✅ Pearl REAL AI LIVE')).catch(console.error);
